@@ -71,7 +71,7 @@ def profile_times(module: nn.Sequential, sample: Union[List[Any], Tensor], timeo
             batch = batch.call(layer)
 
             # Backward
-            backward_tensors = tuple(y for y in batch if y.requires_grad)
+            backward_tensors = tuple(y for y in batch if torch.is_tensor(y) and y.requires_grad)
             if backward_tensors:
                 torch.autograd.backward(backward_tensors, backward_tensors)
 
@@ -95,7 +95,8 @@ def profile_sizes(
     batch = Batch(input)
     sizes: List[int] = []
 
-    latent_scale = batch[0].size(0) / chunks
+    tensor_idx = batch.find_tensor_idx()
+    latent_scale = batch[tensor_idx].size(0) / chunks
     for i, x in enumerate(batch):
         if not torch.is_tensor(x):
             continue
