@@ -1047,8 +1047,6 @@ class CppWrapperCpu(PythonWrapperCodegen):
 
     def _write_aoti_entry_point_signature(self):
         """Emit the AOTI entry point: run_impl method and _const_run_impl."""
-        self.codegen_additional_funcs()
-
         if V.graph.const_module:
             # In dual-wrapper-mode, the const graph's JIT output is emitted separately,
             # while its AOTI body is spliced below into the main AOTI source.
@@ -1123,6 +1121,13 @@ class CppWrapperCpu(PythonWrapperCodegen):
         JIT: inductor_entry_impl free function.
         Dual-wrapper-mode: both signatures, to their respective buffers.
         """
+        # MPS kernel launches call get_<lib>_handle(). Those definitions come
+        # from codegen_additional_funcs (a no-op on CPU/GPU). Emitting them
+        # only from the AOTI signature left pure JIT cpp_wrapper calling a
+        # getter that was never defined (#205433). Write them once, before
+        # either signature: splice() reaches both halves of a dual wrapper,
+        # and the following signatures only open their own entry points.
+        self.codegen_additional_funcs()
         if V.graph.aot_mode:
             self._write_aoti_entry_point_signature()
         self._write_jit_entry_point_signature()

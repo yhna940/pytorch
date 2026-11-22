@@ -245,10 +245,16 @@ class CppWrapperMpsDeviceTests(InductorTestCase):
     lowering.
     """
 
-    def _install_fake_graph(self):
+    def _install_fake_graph(self, *, aot_mode=False, is_dual_wrapper_mode=False):
         self.enterContext(
             V.set_graph_handler(
-                SimpleNamespace(is_dual_wrapper_mode=False, aot_mode=False)
+                SimpleNamespace(
+                    is_dual_wrapper_mode=is_dual_wrapper_mode,
+                    aot_mode=aot_mode,
+                    is_const_graph=False,
+                    const_module=None,
+                    graph_inputs={},
+                )
             )
         )
 
@@ -296,6 +302,46 @@ class CppWrapperMpsDeviceTests(InductorTestCase):
         wrapper.lines = [self._make_kernel_call_line("mps", "mps_lib_0")]
         wrapper.codegen_additional_funcs()
         self.assertIn("get_mps_lib_0_handle", wrapper.prefix.getvalue())
+
+    def test_entry_point_emits_shader_handle_for_jit_and_aoti(self):
+        # #205433: pure JIT cpp_wrapper called get_mps_lib_0_handle() without
+        # defining it, because codegen_additional_funcs ran only while writing
+        # the AOTI signature. Both entry points must emit that definition
+        # once, ahead of the function that launches the kernel. No MPS device
+        # is required; this only renders the wrapper.
+        cases = (
+            (False, False),
+            (True, False),
+            (True, True),
+        )
+        for aot_mode, dual in cases:
+            with self.subTest(aot_mode=aot_mode, dual=dual):
+                self._install_fake_graph(aot_mode=aot_mode, is_dual_wrapper_mode=dual)
+                wrapper = object.__new__(CppWrapperMps)
+                wrapper._used_kernel_names = OrderedSet()
+                wrapper.lines = [self._make_kernel_call_line("mps", "mps_lib_0")]
+                wrapper.prefix = make_codegen_buffer()
+                wrapper.aoti_model_class_name = "AOTInductorModel"
+                wrapper._write_entry_point_signature()
+
+                jit_code = wrapper.prefix.getvalue()
+                self.assertEqual(jit_code.count("get_mps_lib_0_handle()"), 1)
+                self.assertIn(
+                    "aoti_torch_mps_create_shader_library(mps_lib_0_source",
+                    jit_code,
+                )
+                if aot_mode:
+                    aot_code = wrapper.prefix.aot.getvalue() if dual else jit_code
+                    self.assertEqual(aot_code.count("get_mps_lib_0_handle()"), 1)
+                    self.assertLess(
+                        aot_code.index("get_mps_lib_0_handle()"),
+                        aot_code.index("void AOTInductorModel::run_impl("),
+                    )
+                if not aot_mode or dual:
+                    self.assertLess(
+                        jit_code.index("get_mps_lib_0_handle()"),
+                        jit_code.index("void inductor_entry_impl("),
+                    )
 
     def test_nonmatching_line_emits_nothing(self):
         wrapper = self._make_wrapper()

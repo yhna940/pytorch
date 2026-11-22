@@ -87,6 +87,30 @@ class MPSBasicTests(TestCase):
             check_lowp=False,
         )
 
+    @unittest.skipUnless(torch.backends.mps.is_available(), "MPS not available")
+    @inductor_config.patch(cpp_wrapper=True)
+    def test_cpp_wrapper_jit_add(self):
+        # Regression for #205433. JIT cpp_wrapper launches Metal kernels via
+        # get_<lib>_handle(), which used to be emitted only for the AOTI
+        # entry point. The C++ compile then failed with
+        # "use of undeclared identifier 'get_mps_lib_0_handle'".
+        def fn(x, y):
+            return x + y
+
+        x = torch.randn(8, device=self.device)
+        y = torch.randn(8, device=self.device)
+        result, codes = run_and_get_code(torch.compile(fn), x, y)
+        self.assertEqual(result, fn(x, y))
+        wrapper = "\n".join(codes)
+        self.assertRegex(
+            wrapper,
+            r"AOTIMetalKernelFunctionHandle get_mps_lib_\d+_handle\(\)",
+        )
+        self.assertRegex(
+            wrapper,
+            r"aoti_torch_mps_create_shader_library\(mps_lib_\d+_source",
+        )
+
     @contextlib.contextmanager
     def _lower_to_external_template(
         self, op, source, *, multi_output=False, allow_fusion=False
